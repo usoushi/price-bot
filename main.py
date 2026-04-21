@@ -73,7 +73,7 @@ def handle_message(event: MessageEvent):
         return
 
     # --- 一覧 ---
-    if text in ("一覧", "リスト", "list"):
+    if text in ("一覧", "リスト", "list", "LIST"):
         _show_list(user_id, reply_token)
         return
 
@@ -84,13 +84,17 @@ def handle_message(event: MessageEvent):
         _delete_item(user_id, reply_token, index)
         return
 
-    # --- help ---
+    # --- 使い方 ---
     line_client.reply(
         reply_token,
         "使い方:\n"
         "・商品URLを送信 → 価格監視を登録\n"
         "・「一覧」→ 登録中の商品を表示\n"
-        "・「削除 1」→ 番号を指定して削除",
+        "・「削除 1」→ 番号を指定して削除\n"
+        "\n"
+        "対応サイト:\n"
+        "・UNIQLO / GU\n"
+        "・H&M / ZARA / COS",
     )
 
 
