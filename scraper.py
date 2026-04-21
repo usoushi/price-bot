@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import logging
@@ -17,6 +18,28 @@ HEADERS = {
 PRICE_RE = re.compile(r"[\d,]+")
 
 _client = httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True, http2=True)
+
+SCRAPERAPI_KEY = os.getenv("SCRAPER_API_KEY", "")
+SCRAPERAPI_ENDPOINT = "https://api.scraperapi.com"
+
+
+def _fetch_via_scraperapi(url: str, render: bool = False) -> BeautifulSoup | None:
+    if not SCRAPERAPI_KEY:
+        logger.warning("SCRAPER_API_KEY not set, skipping %s", url)
+        return None
+    try:
+        r = httpx.get(
+            SCRAPERAPI_ENDPOINT,
+            params={"api_key": SCRAPERAPI_KEY, "url": url, "render": str(render).lower()},
+            timeout=60,
+            follow_redirects=True,
+        )
+        logger.info("ScraperAPI status: %d (render=%s) %s", r.status_code, render, url)
+        r.raise_for_status()
+        return BeautifulSoup(r.text, "html.parser")
+    except Exception as e:
+        logger.warning("ScraperAPI error for %s: %s", url, e)
+        return None
 
 
 def _to_int(price_str: str) -> int | None:
@@ -206,6 +229,78 @@ def _scrape_gu(url: str) -> tuple[str | None, int | None]:
     return name or None, price or None
 
 
+def _scrape_hm(url: str) -> tuple[str | None, int | None]:
+    """H&M: ScraperAPI(render=False) + JSON-LD name + ¥正規表現で価格取得。"""
+    soup = _fetch_via_scraperapi(url, render=False)
+    if soup is None:
+        return None, None
+
+    # 商品名: JSON-LD(ProductGroup) > og:title
+    name = None
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            d = json.loads(tag.string or "")
+            if isinstance(d, list):
+                d = d[0]
+            if "Product" in str(d.get("@type", "")):
+                name = d.get("name")
+                if name:
+                    break
+        except Exception:
+            pass
+    if not name:
+        og = soup.find("meta", property="og:title")
+        name = og.get("content") if og else None
+
+    # 価格: ¥ に続く最初の数字
+    price = None
+    m = re.search(r"[¥￥]\s*([\d,]+)", soup.get_text())
+    if m:
+        price = _to_int(m.group(1))
+
+    logger.info("H&M result: name=%s price=%s", name, price)
+    return name or None, price or None
+
+
+def _scrape_zara(url: str) -> tuple[str | None, int | None]:
+    """ZARA: ScraperAPI(render=True) + og:title + .price セレクターで取得。"""
+    soup = _fetch_via_scraperapi(url, render=True)
+    if soup is None:
+        return None, None
+
+    og = soup.find("meta", property="og:title")
+    name = og.get("content") if og else None
+
+    price = None
+    tag = soup.select_one(".price")
+    if tag:
+        price = _to_int(tag.get_text())
+
+    logger.info("ZARA result: name=%s price=%s", name, price)
+    return name or None, price or None
+
+
+def _scrape_cos(url: str) -> tuple[str | None, int | None]:
+    """COS: ScraperAPI(render=True) + og:title + [class*='price']で¥価格を取得。"""
+    soup = _fetch_via_scraperapi(url, render=True)
+    if soup is None:
+        return None, None
+
+    og = soup.find("meta", property="og:title")
+    name = og.get("content") if og else None
+
+    price = None
+    for tag in soup.select("[class*='price']"):
+        text = tag.get_text()
+        if "¥" in text or "￥" in text:
+            price = _to_int(text)
+            if price:
+                break
+
+    logger.info("COS result: name=%s price=%s", name, price)
+    return name or None, price or None
+
+
 def _scrape_amazon(soup: BeautifulSoup) -> tuple[str | None, int | None]:
     name_tag = soup.select_one("#productTitle")
     name = name_tag.get_text(strip=True) if name_tag else None
@@ -261,6 +356,15 @@ def get_product_info(url: str) -> tuple[str | None, int | None]:
         name, price = _scrape_gu(url)
         if name and price:
             return name, price
+
+    if "hm.com" in hostname:
+        return _scrape_hm(url)
+
+    if "zara.com" in hostname:
+        return _scrape_zara(url)
+
+    if "cos.com" in hostname:
+        return _scrape_cos(url)
 
     soup = _fetch_soup(url)
     if soup is None:
