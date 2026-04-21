@@ -3,7 +3,7 @@ import sqlite3
 import contextlib
 from datetime import datetime
 
-DB_PATH = os.getenv("DB_PATH", "/data/price_bot.db")
+DB_PATH = os.getenv("DB_PATH", "/tmp/price_bot.db")
 
 
 @contextlib.contextmanager

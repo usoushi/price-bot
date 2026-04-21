@@ -11,7 +11,3 @@ services:
         sync: false
       - key: CHECK_INTERVAL_HOURS
         value: "3"
-    disk:
-      name: sqlite-data
-      mountPath: /data
-      sizeGB: 1
