@@ -340,11 +340,29 @@ def _scrape_amazon(soup: BeautifulSoup) -> tuple[str | None, int | None]:
     return name, price
 
 
+def _truncate_name(name: str, max_len: int = 50) -> str:
+    name = name.split("：")[0].strip()
+    return name[:max_len] if len(name) > max_len else name
+
+
 def _scrape_rakuten(soup: BeautifulSoup) -> tuple[str | None, int | None]:
-    name_tag = soup.select_one(".item_name, h1.item_name")
-    name = name_tag.get_text(strip=True) if name_tag else None
-    price_tag = soup.select_one(".price2, .price")
-    price = _to_int(price_tag.get_text()) if price_tag else None
+    name = None
+    og = soup.find("meta", property="og:title")
+    if og and og.get("content"):
+        name = _truncate_name(og["content"])
+
+    price = None
+    for attr, value in [
+        ("property", "product:price:amount"),
+        ("name", "price"),
+        ("itemprop", "price"),
+    ]:
+        tag = soup.find("meta", {attr: value})
+        if tag:
+            price = _to_int(tag.get("content", ""))
+            if price:
+                break
+
     return name, price
 
 

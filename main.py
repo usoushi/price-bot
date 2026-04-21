@@ -94,7 +94,8 @@ def handle_message(event: MessageEvent):
         "\n"
         "対応サイト:\n"
         "・UNIQLO / GU\n"
-        "・H&M / ZARA / COS",
+        "・H&M / ZARA / COS\n"
+        "・Amazon / 楽天市場",
     )
 
 
