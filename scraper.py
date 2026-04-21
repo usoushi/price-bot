@@ -109,8 +109,8 @@ def _parse_common_selectors(soup: BeautifulSoup) -> tuple[str | None, int | None
 
 def _scrape_uniqlo(url: str) -> tuple[str | None, int | None]:
     """UNIQLOの価格APIとHTMLから商品名・価格を取得。"""
-    # 商品ID抽出: E484875-000 -> 484875
-    match = re.search(r"/products/E(\d+)-", url)
+    # 商品ID抽出: /products/E484875-000/ -> E484875-000
+    match = re.search(r"/products/(E\d+-\d+)", url)
     if not match:
         logger.warning("UNIQLO: product ID not found in URL: %s", url)
         return None, None
@@ -118,24 +118,28 @@ def _scrape_uniqlo(url: str) -> tuple[str | None, int | None]:
     product_id = match.group(1)
     logger.info("UNIQLO: product_id=%s", product_id)
 
-    # 1. 価格API
+    # 1. 価格API: /prices エンドポイントから最初のSKUの価格を取得
     price = None
     price_url = (
         f"https://www.uniqlo.com/jp/api/commerce/v5/ja/products"
-        f"/{product_id}/price-groups/00/l2s?httpFailure=true"
+        f"/{product_id}/prices?httpFailure=true"
     )
     try:
         r = httpx.get(price_url, headers=HEADERS, timeout=15, follow_redirects=True)
         logger.info("UNIQLO price API status: %d", r.status_code)
         if r.status_code == 200:
             data = r.json()
-            items = data.get("result", {}).get("items", [])
-            if items:
-                price = _to_int(str(items[0].get("prices", {}).get("priceDisplay", "")))
+            result = data.get("result", {})
+            # resultはSKU IDをキーとした辞書 {"09100230": {"base": {"value": 3990}, ...}}
+            if result:
+                first_sku = next(iter(result.values()))
+                price = first_sku.get("base", {}).get("value")
+                if price is not None:
+                    price = int(price)
     except Exception as e:
         logger.warning("UNIQLO price API error: %s", e)
 
-    # 2. 商品名をHTMLのtitle / og:titleから取得
+    # 2. 商品名をHTMLのog:title -> titleタグから取得
     name = None
     try:
         r = httpx.get(url, headers=HEADERS, timeout=15, follow_redirects=True)
