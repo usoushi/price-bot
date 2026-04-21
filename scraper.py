@@ -107,49 +107,83 @@ def _parse_common_selectors(soup: BeautifulSoup) -> tuple[str | None, int | None
 # Site-specific parsers
 # ---------------------------------------------------------------------------
 
+_UNIQLO_API_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "ja,en;q=0.9",
+    "Referer": "https://www.uniqlo.com/jp/ja/",
+    "x-fr-clientid": "uq_jp_pc",
+    "x-fr-id": "uq_jp_pc",
+}
+
+
 def _scrape_uniqlo(url: str) -> tuple[str | None, int | None]:
-    """UNIQLOページのHTMLからJSONLD・メタタグ経由で商品名・価格を取得。"""
-    try:
-        resp = _client.get(url)
-        logger.info("UNIQLO fetch status: %d", resp.status_code)
-        resp.raise_for_status()
-    except Exception as e:
-        logger.warning("UNIQLO fetch error: %s", e)
+    """UNIQLOの内部価格APIと商品APIで商品名・価格を取得。"""
+    # URLから商品IDを取得（例: E470996-000）
+    # \w+ はハイフンを含まないため [\w-]+ を使用
+    match = re.search(r"/products/([\w-]+)", url)
+    if not match:
+        logger.warning("UNIQLO: product ID not found in URL: %s", url)
         return None, None
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    product_id = match.group(1).rstrip("/")
+    logger.info("UNIQLO: product_id=%s", product_id)
 
-    # 1. JSON-LD（最も信頼性が高い）
-    name, price = _parse_jsonld(soup)
-    if name and price:
-        return name, price
+    name = None
+    price = None
 
-    # 2. og:title + meta price
-    name, price = _parse_meta(soup)
-    if name and price:
-        return name, price
+    # 1. 価格API（最優先）
+    price_url = (
+        f"https://www.uniqlo.com/jp/api/commerce/v5/ja/products"
+        f"/{product_id}/price-groups/00/l2s?httpFailure=true"
+    )
+    try:
+        r = httpx.get(price_url, headers=_UNIQLO_API_HEADERS, timeout=15, follow_redirects=True)
+        logger.info("UNIQLO price API status: %d", r.status_code)
+        if r.status_code == 200:
+            data = r.json()
+            items = data.get("result", {}).get("items", [])
+            if items:
+                price = _to_int(str(items[0].get("prices", {}).get("base", {}).get("value", "")))
+    except Exception as e:
+        logger.warning("UNIQLO price API error: %s", e)
 
-    # 3. ページ内のJSON埋め込み（UNIQLOはNext.js製で__NEXT_DATA__に商品情報がある）
-    next_data_tag = soup.find("script", id="__NEXT_DATA__")
-    if next_data_tag:
+    # 2. 商品名API
+    name_url = (
+        f"https://www.uniqlo.com/jp/api/commerce/v5/ja/products"
+        f"/{product_id}?httpFailure=true"
+    )
+    try:
+        r = httpx.get(name_url, headers=_UNIQLO_API_HEADERS, timeout=15, follow_redirects=True)
+        logger.info("UNIQLO name API status: %d", r.status_code)
+        if r.status_code == 200:
+            data = r.json()
+            result = data.get("result", {})
+            if isinstance(result, dict):
+                name = result.get("name") or result.get("title")
+            elif isinstance(result, list) and result:
+                name = result[0].get("name")
+    except Exception as e:
+        logger.warning("UNIQLO name API error: %s", e)
+
+    # 3. 価格またはAPIが取れなければHTMLのog:titleをフォールバック
+    if not name or not price:
         try:
-            next_data = json.loads(next_data_tag.string or "")
-            props = next_data.get("props", {}).get("pageProps", {})
-            product = props.get("product") or props.get("productDetail", {})
-            p_name = product.get("name") or product.get("title")
-            prices = product.get("prices") or product.get("priceGroup", {})
-            p_price = None
-            if isinstance(prices, dict):
-                p_price = _to_int(str(prices.get("base", {}).get("value", "") or prices.get("min", "")))
-            elif isinstance(prices, list) and prices:
-                p_price = _to_int(str(prices[0].get("value", "")))
-            if p_name and p_price:
-                return p_name, p_price
-            name = name or p_name
-            price = price or p_price
+            r = httpx.get(url, headers=_UNIQLO_API_HEADERS, timeout=15, follow_redirects=True)
+            logger.info("UNIQLO HTML status: %d", r.status_code)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                if not name:
+                    og = soup.find("meta", property="og:title")
+                    name = og.get("content") if og else None
+                if not price:
+                    _, price = _parse_meta(soup)
+                if not price:
+                    _, price = _parse_jsonld(soup)
         except Exception as e:
-            logger.warning("UNIQLO __NEXT_DATA__ parse error: %s", e)
+            logger.warning("UNIQLO HTML fallback error: %s", e)
 
+    logger.info("UNIQLO result: name=%s price=%s", name, price)
     return name or None, price or None
 
 
