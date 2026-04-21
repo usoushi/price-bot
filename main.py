@@ -30,13 +30,13 @@ def startup():
     logger.info("App started")
 
 
-@app.api_route("/", methods=["GET", "HEAD"])
-def health():
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health_check():
     return {"status": "ok"}
 
 
-@app.get("/health")
-def health_check():
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
     return {"status": "ok"}
 
 
