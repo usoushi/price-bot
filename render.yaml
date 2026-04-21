@@ -11,3 +11,5 @@ services:
         sync: false
       - key: SCRAPER_API_KEY
         sync: false
+      - key: DATABASE_URL
+        sync: false
