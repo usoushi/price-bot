@@ -47,7 +47,7 @@ def check_all_prices():
 
 def start():
     scheduler = BackgroundScheduler(timezone="Asia/Tokyo")
-    scheduler.add_job(check_all_prices, "cron", hour=7, minute=0, id="price_check")
+    scheduler.add_job(check_all_prices, "interval", hours=3, id="price_check")
     scheduler.start()
-    logger.info("Scheduler started (daily at 07:00 JST)")
+    logger.info("Scheduler started (every 3 hours)")
     return scheduler
