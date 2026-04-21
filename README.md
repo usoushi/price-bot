@@ -77,7 +77,6 @@ git push -u origin main
 ```bash
 # 依存パッケージのインストール
 pip install -r requirements.txt
-playwright install chromium
 
 # 環境変数を設定
 export LINE_CHANNEL_SECRET=your_secret

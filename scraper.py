@@ -9,11 +9,7 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept-Language": "ja,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
@@ -112,32 +108,49 @@ def _parse_common_selectors(soup: BeautifulSoup) -> tuple[str | None, int | None
 # ---------------------------------------------------------------------------
 
 def _scrape_uniqlo(url: str) -> tuple[str | None, int | None]:
-    """UNIQLO内部APIを直接叩いて価格を取得（JSレンダリング不要）。"""
-    match = re.search(r"/products/(\w+)", url)
-    if not match:
-        return None, None
-    product_id = match.group(1)
-    api_url = (
-        f"https://www.uniqlo.com/jp/api/commerce/v5/ja/products"
-        f"/{product_id}/price-groups/00/l2s?httpFailure=true"
-    )
+    """UNIQLOページのHTMLからJSONLD・メタタグ経由で商品名・価格を取得。"""
     try:
-        resp = _client.get(api_url)
+        resp = _client.get(url)
+        logger.info("UNIQLO fetch status: %d", resp.status_code)
         resp.raise_for_status()
-        data = resp.json()
-        items_data = data.get("result", {}).get("items", [])
-        if not items_data:
-            return None, None
-        price = items_data[0].get("prices", {}).get("base", {}).get("value")
-        # 商品名はHTMLのog:titleから取得
-        name_resp = _client.get(url)
-        soup = BeautifulSoup(name_resp.text, "html.parser")
-        og = soup.find("meta", property="og:title")
-        name = og.get("content") if og else f"UNIQLO商品 {product_id}"
-        return name, int(price) if price else None
     except Exception as e:
-        logger.warning("UNIQLO API error: %s", e)
+        logger.warning("UNIQLO fetch error: %s", e)
         return None, None
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # 1. JSON-LD（最も信頼性が高い）
+    name, price = _parse_jsonld(soup)
+    if name and price:
+        return name, price
+
+    # 2. og:title + meta price
+    name, price = _parse_meta(soup)
+    if name and price:
+        return name, price
+
+    # 3. ページ内のJSON埋め込み（UNIQLOはNext.js製で__NEXT_DATA__に商品情報がある）
+    next_data_tag = soup.find("script", id="__NEXT_DATA__")
+    if next_data_tag:
+        try:
+            next_data = json.loads(next_data_tag.string or "")
+            props = next_data.get("props", {}).get("pageProps", {})
+            product = props.get("product") or props.get("productDetail", {})
+            p_name = product.get("name") or product.get("title")
+            prices = product.get("prices") or product.get("priceGroup", {})
+            p_price = None
+            if isinstance(prices, dict):
+                p_price = _to_int(str(prices.get("base", {}).get("value", "") or prices.get("min", "")))
+            elif isinstance(prices, list) and prices:
+                p_price = _to_int(str(prices[0].get("value", "")))
+            if p_name and p_price:
+                return p_name, p_price
+            name = name or p_name
+            price = price or p_price
+        except Exception as e:
+            logger.warning("UNIQLO __NEXT_DATA__ parse error: %s", e)
+
+    return name or None, price or None
 
 
 def _scrape_amazon(soup: BeautifulSoup) -> tuple[str | None, int | None]:
