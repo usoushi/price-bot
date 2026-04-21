@@ -159,6 +159,53 @@ def _scrape_uniqlo(url: str) -> tuple[str | None, int | None]:
     return name or None, price or None
 
 
+def _scrape_gu(url: str) -> tuple[str | None, int | None]:
+    """GUの価格APIとHTMLから商品名・価格を取得。UNIQLOと同じAPI構造。"""
+    match = re.search(r"/products/(E\d+-\d+)", url)
+    if not match:
+        logger.warning("GU: product ID not found in URL: %s", url)
+        return None, None
+
+    product_id = match.group(1)
+    logger.info("GU: product_id=%s", product_id)
+
+    price = None
+    price_url = (
+        f"https://www.gu-global.com/jp/api/commerce/v5/ja/products"
+        f"/{product_id}/price-groups/00/prices?httpFailure=true"
+    )
+    try:
+        r = httpx.get(price_url, headers=HEADERS, timeout=15, follow_redirects=True)
+        logger.info("GU price API status: %d", r.status_code)
+        if r.status_code == 200:
+            result = r.json().get("result", {})
+            if result:
+                first_sku = next(iter(result.values()))
+                price = first_sku.get("base", {}).get("value")
+                if price is not None:
+                    price = int(price)
+    except Exception as e:
+        logger.warning("GU price API error: %s", e)
+
+    name = None
+    try:
+        r = httpx.get(url, headers=HEADERS, timeout=15, follow_redirects=True)
+        logger.info("GU HTML status: %d", r.status_code)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            og = soup.find("meta", property="og:title")
+            if og and og.get("content"):
+                name = og["content"]
+            else:
+                title = soup.find("title")
+                name = title.get_text(strip=True) if title else None
+    except Exception as e:
+        logger.warning("GU HTML error: %s", e)
+
+    logger.info("GU result: name=%s price=%s", name, price)
+    return name or None, price or None
+
+
 def _scrape_amazon(soup: BeautifulSoup) -> tuple[str | None, int | None]:
     name_tag = soup.select_one("#productTitle")
     name = name_tag.get_text(strip=True) if name_tag else None
@@ -207,6 +254,11 @@ def get_product_info(url: str) -> tuple[str | None, int | None]:
     # --- サイト専用パーサー ---
     if "uniqlo.com" in hostname:
         name, price = _scrape_uniqlo(url)
+        if name and price:
+            return name, price
+
+    if "gu-global.com" in hostname:
+        name, price = _scrape_gu(url)
         if name and price:
             return name, price
 
