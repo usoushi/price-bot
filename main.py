@@ -24,7 +24,7 @@ URL_RE = re.compile(r"https?://\S+")
 @app.on_event("startup")
 def startup():
     database.init_db()
-    scheduler.start(interval_hours=int(os.getenv("CHECK_INTERVAL_HOURS", "3")))
+    scheduler.start()
     logger.info("App started")
 
 
