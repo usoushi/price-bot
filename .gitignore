@@ -5,3 +5,5 @@ __pycache__/
 *.db
 response.html
 .claude/settings.local.json
+richmenu.png
+line_header.jpg
