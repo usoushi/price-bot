@@ -3,7 +3,7 @@ import json
 import logging
 from urllib.parse import urlparse
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -15,9 +15,12 @@ HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept-Language": "ja,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
 PRICE_RE = re.compile(r"[\d,]+")
+
+_client = httpx.Client(headers=HEADERS, timeout=15, follow_redirects=True, http2=True)
 
 
 def _to_int(price_str: str) -> int | None:
@@ -109,22 +112,25 @@ def _parse_common_selectors(soup: BeautifulSoup) -> tuple[str | None, int | None
 # ---------------------------------------------------------------------------
 
 def _scrape_uniqlo(url: str) -> tuple[str | None, int | None]:
-    """UNIQLO product page via their internal API."""
+    """UNIQLO内部APIを直接叩いて価格を取得（JSレンダリング不要）。"""
     match = re.search(r"/products/(\w+)", url)
     if not match:
         return None, None
     product_id = match.group(1)
-    api_url = f"https://www.uniqlo.com/jp/api/commerce/v5/ja/products/{product_id}/price-groups/00/l2s?httpFailure=true"
+    api_url = (
+        f"https://www.uniqlo.com/jp/api/commerce/v5/ja/products"
+        f"/{product_id}/price-groups/00/l2s?httpFailure=true"
+    )
     try:
-        resp = requests.get(api_url, headers=HEADERS, timeout=10)
+        resp = _client.get(api_url)
         resp.raise_for_status()
         data = resp.json()
         items_data = data.get("result", {}).get("items", [])
         if not items_data:
             return None, None
         price = items_data[0].get("prices", {}).get("base", {}).get("value")
-        # fetch name separately
-        name_resp = requests.get(url, headers=HEADERS, timeout=10)
+        # 商品名はHTMLのog:titleから取得
+        name_resp = _client.get(url)
         soup = BeautifulSoup(name_resp.text, "html.parser")
         og = soup.find("meta", property="og:title")
         name = og.get("content") if og else f"UNIQLO商品 {product_id}"
@@ -165,9 +171,9 @@ def _scrape_rakuten(soup: BeautifulSoup) -> tuple[str | None, int | None]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def _fetch_html(url: str) -> BeautifulSoup | None:
+def _fetch_soup(url: str) -> BeautifulSoup | None:
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
+        resp = _client.get(url)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
@@ -175,17 +181,17 @@ def _fetch_html(url: str) -> BeautifulSoup | None:
         return None
 
 
-def scrape(url: str) -> tuple[str | None, int | None]:
-    """Return (name, price_in_yen) or (None, None) if unsupported."""
+def get_product_info(url: str) -> tuple[str | None, int | None]:
+    """(商品名, 価格) を返す。取得できない場合は (None, None)。"""
     hostname = urlparse(url).hostname or ""
 
-    # --- Site-specific ---
+    # --- サイト専用パーサー ---
     if "uniqlo.com" in hostname:
         name, price = _scrape_uniqlo(url)
         if name and price:
             return name, price
 
-    soup = _fetch_html(url)
+    soup = _fetch_soup(url)
     if soup is None:
         return None, None
 
@@ -199,7 +205,7 @@ def scrape(url: str) -> tuple[str | None, int | None]:
         if name and price:
             return name, price
 
-    # --- Generic fallback chain ---
+    # --- 汎用フォールバック ---
     name, price = _parse_jsonld(soup)
     if not (name and price):
         meta_name, meta_price = _parse_meta(soup)
@@ -211,43 +217,3 @@ def scrape(url: str) -> tuple[str | None, int | None]:
         price = price or sel_price
 
     return name or None, price or None
-
-
-def scrape_with_playwright(url: str) -> tuple[str | None, int | None]:
-    """Fallback using Playwright for JS-heavy pages."""
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        logger.error("playwright not installed")
-        return None, None
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page(extra_http_headers={"Accept-Language": "ja"})
-            page.goto(url, wait_until="networkidle", timeout=30000)
-            html = page.content()
-            browser.close()
-        soup = BeautifulSoup(html, "html.parser")
-        name, price = _parse_jsonld(soup)
-        if not (name and price):
-            meta_name, meta_price = _parse_meta(soup)
-            name = name or meta_name
-            price = price or meta_price
-        if not (name and price):
-            sel_name, sel_price = _parse_common_selectors(soup)
-            name = name or sel_name
-            price = price or sel_price
-        return name or None, price or None
-    except Exception as e:
-        logger.warning("playwright error: %s", e)
-        return None, None
-
-
-def get_product_info(url: str) -> tuple[str | None, int | None]:
-    """Try requests first, fall back to Playwright if price not found."""
-    name, price = scrape(url)
-    if not (name and price):
-        logger.info("Falling back to Playwright for %s", url)
-        name, price = scrape_with_playwright(url)
-    return name, price
