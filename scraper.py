@@ -23,23 +23,25 @@ SCRAPERAPI_KEY = os.getenv("SCRAPER_API_KEY", "")
 SCRAPERAPI_ENDPOINT = "https://api.scraperapi.com"
 
 
-def _fetch_via_scraperapi(url: str, render: bool = False) -> BeautifulSoup | None:
+def _fetch_via_scraperapi(url: str, render: bool = False, retries: int = 2) -> BeautifulSoup | None:
     if not SCRAPERAPI_KEY:
         logger.warning("SCRAPER_API_KEY not set, skipping %s", url)
         return None
-    try:
-        r = httpx.get(
-            SCRAPERAPI_ENDPOINT,
-            params={"api_key": SCRAPERAPI_KEY, "url": url, "render": str(render).lower()},
-            timeout=60,
-            follow_redirects=True,
-        )
-        logger.info("ScraperAPI status: %d (render=%s) %s", r.status_code, render, url)
-        r.raise_for_status()
-        return BeautifulSoup(r.text, "html.parser")
-    except Exception as e:
-        logger.warning("ScraperAPI error for %s: %s", url, e)
-        return None
+    params = {"api_key": SCRAPERAPI_KEY, "url": url, "render": str(render).lower()}
+    for attempt in range(1, retries + 1):
+        try:
+            r = httpx.get(SCRAPERAPI_ENDPOINT, params=params, timeout=60, follow_redirects=True)
+            logger.info("ScraperAPI status: %d (render=%s, attempt=%d) %s", r.status_code, render, attempt, url)
+            if r.status_code == 500 and attempt < retries:
+                logger.warning("ScraperAPI 500, retrying... (%d/%d)", attempt, retries)
+                continue
+            r.raise_for_status()
+            return BeautifulSoup(r.text, "html.parser")
+        except Exception as e:
+            logger.warning("ScraperAPI error (attempt=%d) for %s: %s", attempt, url, e)
+            if attempt == retries:
+                return None
+    return None
 
 
 def _to_int(price_str: str) -> int | None:
@@ -290,12 +292,30 @@ def _scrape_cos(url: str) -> tuple[str | None, int | None]:
     name = og.get("content") if og else None
 
     price = None
-    for tag in soup.select("[class*='price']"):
+    price_tags = soup.select("[class*='price']")
+
+    # 1. 「税込」を含むタグを優先（商品価格に付くことが多い）
+    for tag in price_tags:
         text = tag.get_text()
-        if "¥" in text or "￥" in text:
+        if ("¥" in text or "￥" in text) and "税込" in text:
             price = _to_int(text)
             if price:
                 break
+
+    # 2. 「税込」がなければ ¥ を含む最初のタグ
+    if not price:
+        for tag in price_tags:
+            text = tag.get_text()
+            if "¥" in text or "￥" in text:
+                price = _to_int(text)
+                if price:
+                    break
+
+    # 3. セレクターで取れなければページ全体の ¥ 正規表現
+    if not price:
+        m = re.search(r"[¥￥]\s*([\d,]+)", soup.get_text())
+        if m:
+            price = _to_int(m.group(1))
 
     logger.info("COS result: name=%s price=%s", name, price)
     return name or None, price or None
