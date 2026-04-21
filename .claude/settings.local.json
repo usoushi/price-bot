@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python _check_uniqlo.py)",
+      "Bash(del _check_uniqlo.py)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(rm _check_uniqlo.py)",
+      "Bash(git push *)",
+      "Bash(python poc_scraper.py)",
+      "Bash(pip install *)",
+      "Bash(python -c ' *)",
+      "Bash(rm poc_scraper.py)"
+    ]
+  }
+}
