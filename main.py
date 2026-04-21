@@ -3,6 +3,7 @@ import logging
 import re
 
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import Response
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
@@ -28,7 +29,7 @@ def startup():
     logger.info("App started")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def health():
     return {"status": "ok"}
 
