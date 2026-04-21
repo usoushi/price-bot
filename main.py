@@ -86,7 +86,16 @@ def handle_message(event: MessageEvent):
     )
 
 
+ITEM_LIMIT = 10
+
+
 def _register_item(user_id: str, url: str):
+    if len(database.get_items_by_user(user_id)) >= ITEM_LIMIT:
+        line_client.push(
+            user_id,
+            f"登録上限（{ITEM_LIMIT}商品）に達しています。\n「削除 番号」で不要な商品を削除してから登録してください。",
+        )
+        return
     name, price = get_product_info(url)
     if not name or not price:
         line_client.push(
