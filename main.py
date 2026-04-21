@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import threading
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import Response
@@ -62,7 +63,8 @@ def handle_message(event: MessageEvent):
     if url_match:
         url = url_match.group()
         line_client.reply(reply_token, "URLを確認中です。少々お待ちください...")
-        _register_item(user_id, url)
+        # ScraperAPI使用サイトは最大60秒かかるためバックグラウンドで処理
+        threading.Thread(target=_register_item, args=(user_id, url), daemon=True).start()
         return
 
     # --- 一覧 ---
